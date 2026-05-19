@@ -56,24 +56,15 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi
 
-      - name: Download Android clang r450784e
+      - name: Set clang 14 path
         run: |
           set -e
 
-          mkdir -p toolchains
-          cd toolchains
-
-          git clone --depth=1 --filter=blob:none --sparse \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            android-clang
-
-          cd android-clang
-          git sparse-checkout set clang-r450784e
-
-          echo "$PWD/clang-r450784e/bin" >> "$GITHUB_PATH"
+          echo "/usr/lib/llvm-14/bin" >> "$GITHUB_PATH"
 
           echo "===== CLANG CHECK ====="
-          ./clang-r450784e/bin/clang --version
+          /usr/lib/llvm-14/bin/clang --version
+          /usr/lib/llvm-14/bin/ld.lld --version
 
       - name: Extract Samsung kernel source
         run: |
@@ -108,23 +99,25 @@ jobs:
           export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
           export KBUILD_BUILD_USER=dpi
           export KBUILD_BUILD_HOST=VPHORC629
-          export PATH="$GITHUB_WORKSPACE/toolchains/android-clang/clang-r450784e/bin:$PATH"
+          export PATH="/usr/lib/llvm-14/bin:$PATH"
 
-          make O=out s5e5515-wise6blue_defconfig
+          make O=out_stock s5e5515-wise6blue_defconfig
 
-          # Match your stock CZB6 kernel release string as closely as possible.
-          ./scripts/config --file out/.config --set-str LOCALVERSION "-33003255-abR960XXU2CZB6" || true
-          ./scripts/config --file out/.config -d LOCALVERSION_AUTO || true
-          make O=out olddefconfig
+          # Try to match your stock CZB6 release string:
+          # 5.15.180-33003255-abR960XXU2CZB6
+          ./scripts/config --file out_stock/.config --set-str LOCALVERSION "-33003255-abR960XXU2CZB6" || true
+          ./scripts/config --file out_stock/.config -d LOCALVERSION_AUTO || true
+
+          make O=out_stock olddefconfig
 
           echo "===== STOCK CONFIG VERSION CHECK ====="
-          grep -E "CONFIG_LOCALVERSION|CONFIG_LOCALVERSION_AUTO" out/.config || true
+          grep -E "CONFIG_LOCALVERSION|CONFIG_LOCALVERSION_AUTO" out_stock/.config || true
 
-          make O=out -j"$(nproc)"
+          make O=out_stock -j"$(nproc)"
 
           mkdir -p "$GITHUB_WORKSPACE/dist/stock"
-          cp out/arch/arm64/boot/Image "$GITHUB_WORKSPACE/dist/stock/Image-stock-R960"
-          cp out/.config "$GITHUB_WORKSPACE/dist/stock/stock.config"
+          cp out_stock/arch/arm64/boot/Image "$GITHUB_WORKSPACE/dist/stock/Image-stock-R960"
+          cp out_stock/.config "$GITHUB_WORKSPACE/dist/stock/stock.config"
 
           echo "===== STOCK IMAGE ====="
           ls -lh "$GITHUB_WORKSPACE/dist/stock/Image-stock-R960"
@@ -144,7 +137,7 @@ jobs:
           fi
 
           echo "===== KERNELSU FILE CHECK ====="
-          find . -maxdepth 4 -iname "*kernelsu*" -o -iname "*ksu*" | head -100
+          find . -maxdepth 4 \( -iname "*kernelsu*" -o -iname "*ksu*" \) | head -100
 
       - name: Build KernelSU kernel
         run: |
@@ -161,28 +154,28 @@ jobs:
           export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
           export KBUILD_BUILD_USER=dpi
           export KBUILD_BUILD_HOST=VPHORC629
-          export PATH="$GITHUB_WORKSPACE/toolchains/android-clang/clang-r450784e/bin:$PATH"
+          export PATH="/usr/lib/llvm-14/bin:$PATH"
 
-          make O=out s5e5515-wise6blue_defconfig
+          make O=out_ksu s5e5515-wise6blue_defconfig
 
-          # Match stock CZB6 kernel release string.
-          ./scripts/config --file out/.config --set-str LOCALVERSION "-33003255-abR960XXU2CZB6" || true
-          ./scripts/config --file out/.config -d LOCALVERSION_AUTO || true
+          # Try to match stock CZB6 kernel release string.
+          ./scripts/config --file out_ksu/.config --set-str LOCALVERSION "-33003255-abR960XXU2CZB6" || true
+          ./scripts/config --file out_ksu/.config -d LOCALVERSION_AUTO || true
 
-          # Force KernelSU config on if scripts/config sees it.
-          ./scripts/config --file out/.config -e KSU || true
-          ./scripts/config --file out/.config -e KERNELSU || true
+          # Force KernelSU config if the symbol exists.
+          ./scripts/config --file out_ksu/.config -e KSU || true
+          ./scripts/config --file out_ksu/.config -e KERNELSU || true
 
-          make O=out olddefconfig
+          make O=out_ksu olddefconfig
 
           echo "===== KERNELSU CONFIG CHECK ====="
-          grep -Ei "KSU|KERNELSU|LOCALVERSION" out/.config || true
+          grep -Ei "KSU|KERNELSU|LOCALVERSION" out_ksu/.config || true
 
-          make O=out -j"$(nproc)"
+          make O=out_ksu -j"$(nproc)"
 
           mkdir -p "$GITHUB_WORKSPACE/dist/kernelsu"
-          cp out/arch/arm64/boot/Image "$GITHUB_WORKSPACE/dist/kernelsu/Image-KernelSU-R960"
-          cp out/.config "$GITHUB_WORKSPACE/dist/kernelsu/kernelsu.config"
+          cp out_ksu/arch/arm64/boot/Image "$GITHUB_WORKSPACE/dist/kernelsu/Image-KernelSU-R960"
+          cp out_ksu/.config "$GITHUB_WORKSPACE/dist/kernelsu/kernelsu.config"
 
           echo "===== KERNELSU IMAGE ====="
           ls -lh "$GITHUB_WORKSPACE/dist/kernelsu/Image-KernelSU-R960"
@@ -193,49 +186,55 @@ jobs:
 
           cd work/kernel
 
-          mkdir -p "$GITHUB_WORKSPACE/dist/modules"
-          find out -type f -name "*.ko" -print -exec cp --parents {} "$GITHUB_WORKSPACE/dist/modules/" \; || true
+          mkdir -p "$GITHUB_WORKSPACE/dist/modules_stock"
+          mkdir -p "$GITHUB_WORKSPACE/dist/modules_ksu"
+
+          find out_stock -type f -name "*.ko" -print -exec cp --parents {} "$GITHUB_WORKSPACE/dist/modules_stock/" \; || true
+          find out_ksu -type f -name "*.ko" -print -exec cp --parents {} "$GITHUB_WORKSPACE/dist/modules_ksu/" \; || true
 
           cd "$GITHUB_WORKSPACE/dist"
 
-          tar -czf R960-modules.tar.gz modules || true
+          tar -czf R960-stock-modules.tar.gz modules_stock || true
+          tar -czf R960-kernelsu-modules.tar.gz modules_ksu || true
 
           cat > RELEASE_NOTES.txt <<EOF
-          SM-R960 Galaxy Watch6 Classic KernelSU Build
+SM-R960 Galaxy Watch6 Classic KernelSU Build
 
-          Device: SM-R960 / wise6bl / wise6blue
-          Target firmware: R960XXU2CZB6
-          Target kernel string: 5.15.180-33003255-abR960XXU2CZB6
-          Base source: Kernel.tar.gz from SM-R930_NA_Opensource
-          R960 diff: R960XXU1CYK2_Kernel.tar.gz
-          Defconfig: s5e5515-wise6blue_defconfig
-          KernelSU ref: ${{ github.event.inputs.ksu_ref }}
+Device: SM-R960 / wise6bl / wise6blue
+Target firmware: R960XXU2CZB6
+Target kernel string: 5.15.180-33003255-abR960XXU2CZB6
+Base source: Kernel.tar.gz from SM-R930_NA_Opensource
+R960 diff: R960XXU1CYK2_Kernel.tar.gz
+Defconfig: s5e5515-wise6blue_defconfig
+KernelSU ref: ${{ github.event.inputs.ksu_ref }}
 
-          Files:
-          - Image-KernelSU-R960
-          - kernelsu.config
-          - Image-stock-R960
-          - stock.config
-          - R960-modules.tar.gz
-          - SHA256SUMS.txt
+Files:
+- Image-KernelSU-R960
+- kernelsu.config
+- Image-stock-R960
+- stock.config
+- R960-stock-modules.tar.gz
+- R960-kernelsu-modules.tar.gz
+- SHA256SUMS.txt
 
-          WARNING:
-          Image-KernelSU-R960 is only the raw kernel Image.
-          It is not flashable by itself.
-          It must be repacked into the matching R960XXU2CZB6 boot.img.
-          Do not flash on a locked bootloader.
-          EOF
+WARNING:
+Image-KernelSU-R960 is only the raw kernel Image.
+It is not flashable by itself.
+It must be repacked into the matching R960XXU2CZB6 boot.img.
+Do not flash on a locked bootloader.
+EOF
 
           sha256sum \
             kernelsu/Image-KernelSU-R960 \
             kernelsu/kernelsu.config \
             stock/Image-stock-R960 \
             stock/stock.config \
-            R960-modules.tar.gz \
+            R960-stock-modules.tar.gz \
+            R960-kernelsu-modules.tar.gz \
             > SHA256SUMS.txt
 
           echo "===== FINAL DIST FILES ====="
-          find "$GITHUB_WORKSPACE/dist" -type f -maxdepth 3 -print -exec ls -lh {} \;
+          find "$GITHUB_WORKSPACE/dist" -maxdepth 3 -type f -print -exec ls -lh {} \;
 
       - name: Create release tag
         id: vars
@@ -255,6 +254,7 @@ jobs:
             dist/kernelsu/kernelsu.config
             dist/stock/Image-stock-R960
             dist/stock/stock.config
-            dist/R960-modules.tar.gz
+            dist/R960-stock-modules.tar.gz
+            dist/R960-kernelsu-modules.tar.gz
             dist/SHA256SUMS.txt
             dist/RELEASE_NOTES.txt
