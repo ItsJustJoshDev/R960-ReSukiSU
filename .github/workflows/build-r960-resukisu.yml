@@ -125,14 +125,11 @@ jobs:
 
           make O=out_resukisu s5e5515-wise6blue_defconfig
 
-          # Remove dirty-tree plus sign from kernel release.
           printf "" > .scmversion
 
-          # Match stock R960XXU2CZB6 release string.
           ./scripts/config --file out_resukisu/.config --set-str LOCALVERSION "-33003255-abR960XXU2CZB6" || true
           ./scripts/config --file out_resukisu/.config -d LOCALVERSION_AUTO || true
 
-          # Disable Samsung/custom-kernel blockers if present.
           ./scripts/config --file out_resukisu/.config -d MODULE_SIG_PROTECT || true
           ./scripts/config --file out_resukisu/.config -d UH || true
           ./scripts/config --file out_resukisu/.config -d RKP || true
@@ -141,17 +138,15 @@ jobs:
           ./scripts/config --file out_resukisu/.config -d SVSMC || true
           ./scripts/config --file out_resukisu/.config -d SAMSUNG_PRODUCT_SHIP || true
 
-          # Enable root solution symbols if present.
           ./scripts/config --file out_resukisu/.config -e KSU || true
           ./scripts/config --file out_resukisu/.config -e KERNELSU || true
           ./scripts/config --file out_resukisu/.config -e RESUKISU || true
 
           make O=out_resukisu olddefconfig
 
-          echo "===== CONFIG CHECK ====="
+          echo "===== SAMSUNG BLOCKER STRICT CHECK ====="
           grep -Ei "LOCALVERSION|KSU|KERNELSU|RESUKISU|MODULE_SIG_PROTECT|CONFIG_UH|CONFIG_RKP|CONFIG_KDP|CONFIG_SECURITY_DEFEX|CONFIG_SVSMC|CONFIG_SAMSUNG_PRODUCT_SHIP" out_resukisu/.config || true
 
-          echo "===== SAMSUNG BLOCKER STRICT CHECK ====="
           BAD=0
           for sym in \
             CONFIG_MODULE_SIG_PROTECT \
@@ -216,19 +211,55 @@ jobs:
         run: |
           set -e
 
-          python3 - <<'PY'
+          echo "===== Download avbtool with retries/fallbacks ====="
+
+          if [ -f "tools/avbtool.py" ]; then
+            echo "Using repo-local tools/avbtool.py"
+            cp tools/avbtool.py avbtool.py
+          else
+            mkdir -p tools
+
+            python3 - <<'PY' || true
           import base64
+          import time
           import urllib.request
 
           url = "https://android.googlesource.com/platform/external/avb/+/refs/heads/main/avbtool.py?format=TEXT"
-          print("Downloading:", url)
-          data = urllib.request.urlopen(url, timeout=60).read()
-          open("avbtool.py", "wb").write(base64.b64decode(data))
-          print("Wrote avbtool.py")
+
+          for attempt in range(1, 8):
+              try:
+                  print(f"Attempt {attempt}: {url}")
+                  data = urllib.request.urlopen(url, timeout=60).read()
+                  open("avbtool.py", "wb").write(base64.b64decode(data))
+                  print("Downloaded avbtool.py from googlesource")
+                  raise SystemExit(0)
+              except Exception as e:
+                  print("Failed:", e)
+                  time.sleep(5)
+
+          raise SystemExit(1)
           PY
 
+            if [ ! -s avbtool.py ]; then
+              echo "Googlesource failed. Trying GitHub raw mirror..."
+              curl -L --retry 10 --retry-all-errors --retry-delay 5 \
+                -o avbtool.py \
+                https://raw.githubusercontent.com/aosp-mirror/platform_external_avb/master/avbtool.py
+            fi
+
+            if [ ! -s avbtool.py ]; then
+              echo "Raw mirror failed. Cloning GitHub mirror..."
+              git clone --depth=1 https://github.com/aosp-mirror/platform_external_avb.git tools/platform_external_avb
+              cp tools/platform_external_avb/avbtool.py avbtool.py
+            fi
+          fi
+
           chmod +x avbtool.py
+
+          echo "===== avbtool check ====="
           python3 avbtool.py --help >/dev/null
+          python3 avbtool.py --version || true
+          echo "avbtool OK"
 
       - name: Repack boot.img with ReSukiSU Image
         run: |
@@ -389,7 +420,7 @@ jobs:
             dist/R960_ReSukiSU_AP.tar.md5 \
             > dist/SHA256SUMS.txt
 
-          cat > dist/RELEASE_NOTES.txt <<EOF
+          cat > dist/RELEASE_NOTES.txt <<'EOF'
           SM-R960 Galaxy Watch6 Classic ReSukiSU AP
 
           Target firmware:
@@ -403,19 +434,6 @@ jobs:
           - init_boot.img
           - vbmeta.img
 
-          ReSukiSU setup URL:
-          - ${{ github.event.inputs.resukisu_setup_url }}
-
-          Config changes attempted:
-          - CONFIG_MODULE_SIG_PROTECT disabled if present
-          - CONFIG_UH disabled if present
-          - CONFIG_RKP disabled if present
-          - CONFIG_KDP disabled if present
-          - CONFIG_SECURITY_DEFEX disabled if present
-          - CONFIG_SVSMC disabled if present
-          - CONFIG_SAMSUNG_PRODUCT_SHIP disabled if present
-
-          WARNING:
           Flash only after bootloader unlock.
           This AP tar is for SM-R960 R960XXU2CZB6 only.
           EOF
